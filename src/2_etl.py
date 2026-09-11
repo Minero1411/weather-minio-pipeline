@@ -69,7 +69,30 @@ client.put_object(
     data=io.BytesIO(parquet_data),
     length=len(parquet_data)
 )
+# -----------------------------------------
+# BƯỚC 4.1: TỔNG HỢP & LƯU TẦNG GOLD (AGGREGATED LAYER)
+# -----------------------------------------
+object_name_gold = "gold/monthly_kpi/hanoi_kpi.parquet"
+print(f">>> Đang tổng hợp dữ liệu KPI và lưu lên Gold Layer: {bucket_name}/{object_name_gold}...")
 
+# 1. Trích xuất tháng và gom nhóm tính trung bình các chỉ số khí tượng
+df_gold = df.copy()
+df_gold['month'] = df_gold['time'].dt.month
+gold_kpi = df_gold.groupby('month')[['temperature_2m', 'relative_humidity_2m', 'surface_pressure', 'precipitation']].mean().reset_index()
+
+# 2. Nén DataFrame sang Parquet trên bộ nhớ đệm RAM
+gold_buffer = io.BytesIO()
+gold_kpi.to_parquet(gold_buffer, index=False, engine='pyarrow')
+gold_data = gold_buffer.getvalue()
+
+# 3. Đẩy file Parquet tầng Gold lên MinIO
+client.put_object(
+    bucket_name=bucket_name,
+    object_name=object_name_gold,
+    data=io.BytesIO(gold_data),
+    length=len(gold_data)
+)
+print(">>> Đã tạo và lưu thành công dữ liệu tầng Gold!")
 # -----------------------------------------
 # BƯỚC 5: ĐO LƯỜNG THỰC NGHIỆM ĐỌC PARQUET
 # -----------------------------------------
