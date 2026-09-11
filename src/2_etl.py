@@ -22,7 +22,8 @@ client = Minio(
 # Cấu hình bucket và đường dẫn chính xác theo thực tế
 bucket_name = "weather-data"
 object_name_json = "bronze/year=2023/hanoi_weather_raw.json"
-object_name_parquet = "silver/year=2023/hanoi_weather_clean.parquet"
+object_name_silver = "silver/year=2023/hanoi_weather_clean.parquet"
+object_name_gold = "gold/year=2023/hanoi_weather_features.parquet"
 
 # Đảm bảo bucket weather-data tồn tại
 if not client.bucket_exists(bucket_name):
@@ -52,9 +53,9 @@ df = df.dropna()
 print(">>> Đã làm sạch dữ liệu thành công!")
 
 # -----------------------------------------
-# BƯỚC 4: TẢI LÊN (LOAD) & LƯU PARQUET
+# BƯỚC 4.1: XỬ LÝ VÀ TẢI LÊN TẦNG SILVER
 # -----------------------------------------
-print(f">>> Đang nén và lưu Parquet lên: {bucket_name}/{object_name_parquet}...")
+print(f">>> Đang nén và lưu Parquet lên: {bucket_name}/{object_name_silver}...")
 
 # Nén DataFrame sang Parquet trên bộ nhớ đệm (RAM) thay vì lưu xuống ổ cứng
 parquet_buffer = io.BytesIO()
@@ -65,58 +66,67 @@ parquet_size_kb = len(parquet_data) / 1024
 # Đẩy thẳng file Parquet từ bộ nhớ đệm lên MinIO
 client.put_object(
     bucket_name=bucket_name,
-    object_name=object_name_parquet,
+    object_name=object_name_silver,
     data=io.BytesIO(parquet_data),
     length=len(parquet_data)
 )
 # -----------------------------------------
-# BƯỚC 4.1: TỔNG HỢP & LƯU TẦNG GOLD (AGGREGATED LAYER)
+# BƯỚC 4.2: XỬ LÝ VÀ TẢI LÊN TẦNG GOLD 
 # -----------------------------------------
-object_name_gold = "gold/monthly_kpi/hanoi_kpi.parquet"
-print(f">>> Đang tổng hợp dữ liệu KPI và lưu lên Gold Layer: {bucket_name}/{object_name_gold}...")
+print(f">>> Đang tạo đặc trưng và lưu Parquet lên tầng Gold: {bucket_name}/{object_name_gold}...")
 
-# 1. Trích xuất tháng và gom nhóm tính trung bình các chỉ số khí tượng
+# 1. Feature Engineering: Trích xuất hour, day, month từ cột time
 df_gold = df.copy()
+df_gold['hour'] = df_gold['time'].dt.hour
+df_gold['day'] = df_gold['time'].dt.day
 df_gold['month'] = df_gold['time'].dt.month
-gold_kpi = df_gold.groupby('month')[['temperature_2m', 'relative_humidity_2m', 'surface_pressure', 'precipitation']].mean().reset_index()
 
-# 2. Nén DataFrame sang Parquet trên bộ nhớ đệm RAM
-gold_buffer = io.BytesIO()
-gold_kpi.to_parquet(gold_buffer, index=False, engine='pyarrow')
-gold_data = gold_buffer.getvalue()
+# 2. Nén DataFrame sang Parquet (chỉ định rõ compression='snappy')
+parquet_buffer_gold = io.BytesIO()
+df_gold.to_parquet(parquet_buffer_gold, index=False, engine='pyarrow', compression='snappy')
+parquet_data_gold = parquet_buffer_gold.getvalue()
+gold_size_kb = len(parquet_data_gold) / 1024
 
-# 3. Đẩy file Parquet tầng Gold lên MinIO
+# 3. Đẩy thẳng file Parquet từ RAM lên thư mục Gold trên MinIO
 client.put_object(
     bucket_name=bucket_name,
     object_name=object_name_gold,
-    data=io.BytesIO(gold_data),
-    length=len(gold_data)
+    data=io.BytesIO(parquet_data_gold),
+    length=len(parquet_data_gold)
 )
-print(">>> Đã tạo và lưu thành công dữ liệu tầng Gold!")
+print(">>> Đã tạo và đẩy dữ liệu tầng Gold thành công!")
+
 # -----------------------------------------
 # BƯỚC 5: ĐO LƯỜNG THỰC NGHIỆM ĐỌC PARQUET
 # -----------------------------------------
-start_time_pq = time.time()
-pq_response = client.get_object(bucket_name, object_name_parquet)
-pq_response.read()
-pq_read_time = time.time() - start_time_pq
-pq_response.close()
-pq_response.release_conn()
+# Đo thời gian đọc Silver
+start_time_sv = time.time()
+sv_response = client.get_object(bucket_name, object_name_silver)
+sv_response.read()
+sv_read_time = time.time() - start_time_sv
+sv_response.close()
+sv_response.release_conn()
+
+# Đo thời gian đọc Gold
+start_time_gd = time.time()
+gd_response = client.get_object(bucket_name, object_name_gold)
+gd_response.read()
+gd_read_time = time.time() - start_time_gd
+gd_response.close()
+gd_response.release_conn()
 
 # -----------------------------------------
 # KẾT QUẢ BENCHMARK
 # -----------------------------------------
 print("\n" + "="*55)
-print("BÁO CÁO BENCHMARK: JSON vs PARQUET")
+print("BÁO CÁO BENCHMARK: BRONZE vs SILVER vs GOLD")
 print("="*55)
-print(f"1. Định dạng JSON (Lớp Bronze):")
-print(f"   - Kích thước : {json_size_kb:,.2f} KB")
-print(f"   - Tốc độ đọc : {json_read_time:.5f} giây")
-print("-" * 55)
-print(f"2. Định dạng Parquet (Lớp Silver):")
-print(f"   - Kích thước : {parquet_size_kb:,.2f} KB")
-print(f"   - Tốc độ đọc : {pq_read_time:.5f} giây")
-print(f"   - Hiệu năng  : Giảm {((json_size_kb - parquet_size_kb) / json_size_kb * 100):.2f}% dung lượng lưu trữ")
+print(f"1. Tầng Bronze (JSON):")
+print(f"   - Kích thước : {json_size_kb:,.2f} KB | Tốc độ đọc : {json_read_time:.5f} s")
+print(f"2. Tầng Silver (Parquet Cleaned):")
+print(f"   - Kích thước : {parquet_size_kb:,.2f} KB | Tốc độ đọc : {sv_read_time:.5f} s")
+print(f"3. Tầng Gold (Parquet + Features + Snappy):")
+print(f"   - Kích thước : {gold_size_kb:,.2f} KB | Tốc độ đọc : {gd_read_time:.5f} s")
 print("="*55 + "\n")
 
 import matplotlib.pyplot as plt
@@ -127,11 +137,11 @@ import matplotlib.pyplot as plt
 print(">>> Đang tạo đồ thị báo cáo...")
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
-labels = ['JSON (Bronze)', 'Parquet (Silver)']
-colors = ['#ff9999', '#66b3ff']
+labels = ['Bronze (JSON)', 'Silver (Parquet)', 'Gold (Parquet)']
+colors = ['#ff9999', '#66b3ff', '#99ff99']
 
 # Biểu đồ 1: Dung lượng
-sizes = [json_size_kb, parquet_size_kb]
+sizes = [json_size_kb, parquet_size_kb, gold_size_kb]
 ax1.bar(labels, sizes, color=colors, width=0.5)
 ax1.set_title('So sánh Dung lượng lưu trữ (KB)')
 ax1.set_ylabel('Dung lượng (KB)')
@@ -139,7 +149,7 @@ for i, v in enumerate(sizes):
     ax1.text(i, v + 10, f"{v:,.2f}", ha='center', fontweight='bold')
 
 # Biểu đồ 2: Tốc độ đọc
-times = [json_read_time, pq_read_time]
+times = [json_read_time, sv_read_time, gd_read_time]
 ax2.bar(labels, times, color=colors, width=0.5)
 ax2.set_title('So sánh Tốc độ đọc (Giây)')
 ax2.set_ylabel('Thời gian (s)')
