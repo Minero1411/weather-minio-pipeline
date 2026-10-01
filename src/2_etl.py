@@ -70,6 +70,14 @@ client.put_object(
     data=io.BytesIO(parquet_data),
     length=len(parquet_data)
 )
+
+# Lưu bản backup tầng Silver xuống máy chủ host
+backup_silver_path = os.path.join("backup", object_name_silver)
+os.makedirs(os.path.dirname(backup_silver_path), exist_ok=True)
+with open(backup_silver_path, "wb") as f:
+    f.write(parquet_data)
+print(f" [Backup Host] Đã lưu Parquet Silver tại: {backup_silver_path}")
+
 # -----------------------------------------
 # BƯỚC 4.2: XỬ LÝ VÀ TẢI LÊN TẦNG GOLD 
 # -----------------------------------------
@@ -95,6 +103,14 @@ client.put_object(
     length=len(parquet_data_gold)
 )
 print(">>> Đã tạo và đẩy dữ liệu tầng Gold thành công!")
+
+# Lưu bản backup tầng Gold xuống máy chủ host
+backup_gold_path = os.path.join("backup", object_name_gold)
+os.makedirs(os.path.dirname(backup_gold_path), exist_ok=True)
+with open(backup_gold_path, "wb") as f:
+    f.write(parquet_data_gold)
+print(f" [Backup Host] Đã lưu Parquet Gold tại: {backup_gold_path}")
+
 
 # -----------------------------------------
 # BƯỚC 5: ĐO LƯỜNG THỰC NGHIỆM ĐỌC PARQUET

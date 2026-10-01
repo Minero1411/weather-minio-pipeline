@@ -44,3 +44,11 @@ client.put_object(
 )
 
 print(f" [Thành công] Đã lưu dữ liệu thô vào Bronze Layer tại: {object_path}")
+
+# 5. Lưu thêm 1 bản sao lưu (backup) tại máy chủ host
+backup_local_path = os.path.join("backup", object_path)
+os.makedirs(os.path.dirname(backup_local_path), exist_ok=True)
+with open(backup_local_path, "wb") as f:
+    f.write(json_bytes)
+
+print(f" [Backup Host] Đã lưu bản sao lưu thô tại: {backup_local_path}")
